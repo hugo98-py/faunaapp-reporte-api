@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import List, Literal, Optional
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
@@ -30,6 +31,28 @@ app = FastAPI(
     title="API Reporte de Terreno - FaunaApp",
     description="Genera el Word/PDF del reporte de campaña a partir del resumen de la página Reporte.",
     version="1.0.0",
+)
+
+# CORS: necesario porque Flutter Web corre en el navegador y hace la llamada
+# desde un origen distinto (localhost:xxxx en desarrollo, o el dominio donde
+# publiques la app) al de esta API. Sin esto el navegador bloquea la respuesta
+# aunque el backend funcione bien.
+#
+# allow_origins=["*"] es seguro acá porque el endpoint no usa cookies/sesión
+# ni credenciales (allow_credentials=False) — solo recibe JSON y devuelve un
+# archivo. Si más adelante agregas autenticación con cookies, cambia esto a
+# la lista explícita de dominios donde publiques la app (ver comentario abajo).
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    # Ejemplo de restricción a dominios específicos, si prefieres no dejarlo abierto:
+    # allow_origins=[
+    #     "http://localhost:PUERTO_DE_TU_APP_EN_DESARROLLO",
+    #     "https://tu-dominio-de-produccion.com",
+    # ],
+    allow_credentials=False,
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
 )
 
 
