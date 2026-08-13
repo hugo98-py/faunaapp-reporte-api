@@ -1,15 +1,16 @@
 """
 API de generación de Reporte de Terreno (FaunaApp)
 ----------------------------------------------------
-Recibe el JSON resumido de la página Reporte y devuelve el documento
-generado en formato .docx o .pdf, según el parámetro `formato`.
+Recibe el JSON resumido de la página Reporte y genera el documento en
+formato .docx o .pdf, según el parámetro `formato`.
+
+Flujo en dos pasos (para que el cliente reciba una URL de descarga en
+vez del archivo directo en la respuesta del POST):
+    1. POST /reportes/word?formato=docx   -> {"url": "https://.../descargas/xxx.docx"}
+    2. GET  esa url                       -> descarga el archivo (y se autoborra del servidor)
 
 Ejecutar localmente:
     uvicorn main:app --reload
-
-Endpoint principal:
-    POST /reportes/word?formato=docx   (o formato=pdf)
-    Body: JSON con la forma de ReporteRequest (ver modelos abajo)
 """
 
 import shutil
@@ -19,7 +20,7 @@ import uuid
 from pathlib import Path
 from typing import List, Literal, Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
@@ -30,30 +31,28 @@ from generar_reporte import generar_reporte
 app = FastAPI(
     title="API Reporte de Terreno - FaunaApp",
     description="Genera el Word/PDF del reporte de campaña a partir del resumen de la página Reporte.",
-    version="1.0.0",
+    version="1.1.0",
 )
 
-# CORS: necesario porque Flutter Web corre en el navegador y hace la llamada
-# desde un origen distinto (localhost:xxxx en desarrollo, o el dominio donde
-# publiques la app) al de esta API. Sin esto el navegador bloquea la respuesta
-# aunque el backend funcione bien.
-#
-# allow_origins=["*"] es seguro acá porque el endpoint no usa cookies/sesión
-# ni credenciales (allow_credentials=False) — solo recibe JSON y devuelve un
-# archivo. Si más adelante agregas autenticación con cookies, cambia esto a
-# la lista explícita de dominios donde publiques la app (ver comentario abajo).
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    # Ejemplo de restricción a dominios específicos, si prefieres no dejarlo abierto:
-    # allow_origins=[
-    #     "http://localhost:PUERTO_DE_TU_APP_EN_DESARROLLO",
-    #     "https://tu-dominio-de-produccion.com",
-    # ],
     allow_credentials=False,
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+
+# Carpeta donde quedan los archivos ya generados, esperando a que el cliente
+# haga el GET de descarga. Vive mientras el contenedor esté corriendo (se
+# reinicia con cada deploy, lo cual está bien: son archivos de paso, no datos
+# a conservar).
+DESCARGAS_DIR = Path(tempfile.gettempdir()) / "reportes_descargas"
+DESCARGAS_DIR.mkdir(parents=True, exist_ok=True)
+
+MEDIA_TYPES = {
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "pdf": "application/pdf",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -62,7 +61,7 @@ app.add_middleware(
 
 class EquipoProfesionalItem(BaseModel):
     nombre: str
-    profesion: str
+    profesion: str = ""
     jefeTerreno: bool = False
 
 
@@ -110,50 +109,61 @@ def health_check():
 
 @app.post("/reportes/word")
 def generar_documento(
+    request: Request,
     payload: ReporteRequest,
     formato: Literal["docx", "pdf"] = Query("docx", description="Formato de descarga: docx o pdf"),
 ):
-    """Genera el reporte y lo devuelve como archivo descargable."""
+    """Genera el reporte y devuelve la URL para descargarlo (no el archivo directo)."""
 
-    # Carpeta temporal exclusiva por request, para evitar colisiones entre
-    # descargas concurrentes en el mismo contenedor.
-    tmp_dir = Path(tempfile.mkdtemp(prefix="reporte_"))
     nombre_base = f"Reporte_Terreno_{uuid.uuid4().hex[:8]}"
-    docx_path = tmp_dir / f"{nombre_base}.docx"
+    docx_path = DESCARGAS_DIR / f"{nombre_base}.docx"
 
     try:
         generar_reporte(payload.model_dump(), docx_path)
     except Exception as exc:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
         raise HTTPException(status_code=500, detail=f"Error generando el documento: {exc}") from exc
 
-    if formato == "docx":
-        return FileResponse(
-            path=docx_path,
-            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            filename=f"{nombre_base}.docx",
-            background=BackgroundTask(shutil.rmtree, tmp_dir, ignore_errors=True),
-        )
+    archivo_final = docx_path
 
-    # formato == "pdf": convertir con LibreOffice headless
-    pdf_path = tmp_dir / f"{nombre_base}.pdf"
-    try:
-        resultado = subprocess.run(
-            [
-                "soffice", "--headless", "--norestore",
-                "--convert-to", "pdf", "--outdir", str(tmp_dir), str(docx_path),
-            ],
-            capture_output=True, text=True, timeout=60,
-        )
-        if resultado.returncode != 0 or not pdf_path.exists():
-            raise RuntimeError(resultado.stderr or "LibreOffice no generó el PDF.")
-    except Exception as exc:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-        raise HTTPException(status_code=500, detail=f"Error convirtiendo a PDF: {exc}") from exc
+    if formato == "pdf":
+        pdf_path = DESCARGAS_DIR / f"{nombre_base}.pdf"
+        try:
+            resultado = subprocess.run(
+                [
+                    "soffice", "--headless", "--norestore",
+                    "--convert-to", "pdf", "--outdir", str(DESCARGAS_DIR), str(docx_path),
+                ],
+                capture_output=True, text=True, timeout=60,
+            )
+            if resultado.returncode != 0 or not pdf_path.exists():
+                raise RuntimeError(resultado.stderr or "LibreOffice no generó el PDF.")
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Error convirtiendo a PDF: {exc}") from exc
+        finally:
+            docx_path.unlink(missing_ok=True)  # ya no se necesita el .docx intermedio
+        archivo_final = pdf_path
+
+    # request.base_url ya trae el dominio correcto (local o el de Render),
+    # sin necesidad de hardcodearlo.
+    url_descarga = f"{str(request.base_url).rstrip('/')}/descargas/{archivo_final.name}"
+    return {"url": url_descarga, "formato": formato, "nombreArchivo": archivo_final.name}
+
+
+@app.get("/descargas/{nombre_archivo}")
+def descargar_archivo(nombre_archivo: str):
+    """Sirve el archivo generado y lo borra del servidor una vez entregado."""
+
+    ruta = DESCARGAS_DIR / nombre_archivo
+    # Evita path traversal (ej. ../../algo) validando que siga dentro de DESCARGAS_DIR
+    if DESCARGAS_DIR not in ruta.resolve().parents or not ruta.exists():
+        raise HTTPException(status_code=404, detail="Archivo no encontrado o ya expiró.")
+
+    extension = ruta.suffix.lstrip(".")
+    media_type = MEDIA_TYPES.get(extension, "application/octet-stream")
 
     return FileResponse(
-        path=pdf_path,
-        media_type="application/pdf",
-        filename=f"{nombre_base}.pdf",
-        background=BackgroundTask(shutil.rmtree, tmp_dir, ignore_errors=True),
+        path=ruta,
+        media_type=media_type,
+        filename=ruta.name,
+        background=BackgroundTask(ruta.unlink, missing_ok=True),
     )
