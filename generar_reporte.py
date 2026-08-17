@@ -326,10 +326,25 @@ def build_portada(doc, metadata: dict):
         p_logo.alignment = WD_ALIGN_PARAGRAPH.CENTER
         p_logo.add_run().add_picture(str(LOGO_PATH), width=Cm(4.5))
 
+    TIPO_CAMPANA_TEXTO = {
+        "Linea Base": "LÍNEA DE BASE ECOSISTEMAS TERRESTRES",
+        "Monitoreo": "MONITOREO ECOSISTEMAS TERRESTRES",
+    }
+    COMPONENTE_TEXTO = {
+        "Fauna": "FAUNA TERRESTRE",
+        "Flora": "FLORA Y VEGETACIÓN",
+    }
+    texto_tipo_campana = TIPO_CAMPANA_TEXTO.get(
+        metadata.get("tipoCampana"), "LÍNEA DE BASE ECOSISTEMAS TERRESTRES"
+    )
+    texto_componente = COMPONENTE_TEXTO.get(
+        metadata.get("componente"), "FAUNA TERRESTRE"
+    )
+
     linea_portada("", 20, space_before=40)
     linea_portada("REPORTE DE TERRENO", 20)
-    linea_portada("LÍNEA DE BASE ECOSISTEMAS TERRESTRES", 20)
-    linea_portada("FAUNA TERRESTRE", 20)
+    linea_portada(texto_tipo_campana, 20)
+    linea_portada(texto_componente, 20)
     linea_portada(metadata["nombreProyecto"], 20)
     linea_portada(f"{metadata['epoca'].upper()} - {metadata['anio']}", 20)
     linea_portada(metadata["mesAnio"].upper(), 16, space_before=170)
