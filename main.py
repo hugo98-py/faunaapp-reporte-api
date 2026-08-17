@@ -1,3 +1,4 @@
+
 """
 API de generación de Reporte de Terreno (FaunaApp)
 ----------------------------------------------------
@@ -129,6 +130,8 @@ class Metadata(BaseModel):
     fechaCampana: str
     equipoProfesional: List[EquipoProfesionalItem]
     equiposUtilizados: str
+    tipoCampana: str = ""
+    componente: str = ""
 
 
 class SingularidadTabla2Item(BaseModel):
