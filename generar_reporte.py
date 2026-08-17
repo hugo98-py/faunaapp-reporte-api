@@ -115,6 +115,10 @@ MARGIN_LEFT_RIGHT = Cm(3.0)
 
 ANCHO_BARRA = Cm(2.3)
 
+# Ancho útil de página (para que las tablas siempre calcen con el margen,
+# sin importar cuántas columnas de estación tenga la Tabla 3).
+CONTENT_WIDTH_CM = 21.59 - 2 * 3.0
+
 
 def set_cell_shading(cell, hex_color: str):
     """Aplica color de fondo a una celda de tabla (python-docx no lo expone directo)."""
@@ -469,9 +473,24 @@ def build_tabla3_por_estacion(doc, filas: list[dict]):
     table.style = "Table Grid"
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
 
-    col_widths = [2.3, 3.5] + [1.6] * len(estaciones)
+    # Clase y Nombre científico mantienen ancho fijo (igual criterio que la
+    # Tabla 2); las columnas de estación se reparten lo que queda del ancho
+    # útil de página, para que la tabla siempre llegue al mismo ancho que
+    # la Tabla 2, sin importar cuántas estaciones haya.
+    CLASE_W, ESPECIE_W = 2.3, 3.5
+    MIN_COL_ESTACION = 1.5  # piso para no comprimir demasiado si hay muchas estaciones
+    if estaciones:
+        ancho_disponible = CONTENT_WIDTH_CM - CLASE_W - ESPECIE_W
+        est_w = max(MIN_COL_ESTACION, ancho_disponible / len(estaciones))
+    else:
+        est_w = MIN_COL_ESTACION
+    col_widths = [CLASE_W, ESPECIE_W] + [est_w] * len(estaciones)
+
+    table.autofit = False
     for i, w in enumerate(col_widths):
         table.columns[i].width = Cm(w)
+        for row in table.rows:
+            row.cells[i].width = Cm(w)
 
     # Encabezado fila 1: "Clase" / "Nombre científico" (merge vertical con fila 2) + "Estación de muestreo" (merge horizontal)
     merge_vertical([table.cell(0, 0), table.cell(1, 0)])
