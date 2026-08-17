@@ -17,4 +17,12 @@ COPY . .
 
 # Render inyecta la variable PORT; el fallback 8000 es solo para correr local.
 ENV PORT=8000
-CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT}"]
+
+# Render termina el TLS en su proxy y le habla al contenedor por HTTP plano.
+# Por defecto uvicorn solo confía en 127.0.0.1, así que descarta el header
+# X-Forwarded-Proto y arma las URLs con http:// -> el navegador bloquea la
+# descarga por mixed content. Con esto uvicorn confía en el proxy y el
+# scheme queda en https.
+ENV FORWARDED_ALLOW_IPS=*
+
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT} --proxy-headers --forwarded-allow-ips '*'"]
